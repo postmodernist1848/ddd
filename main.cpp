@@ -1,7 +1,8 @@
 #include <iostream>
 #include <SDL2/SDL.h>
-#include <cmath>
 #include <limits>
+#include <vector>
+#include <algorithm>
 
 #define scp(pointer, message) {                                               \
     if (pointer == NULL) {                                                    \
@@ -24,6 +25,7 @@ int screen_width;
 int screen_height;
 
 void init() {
+
 	scc(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER), "Could not initialize SDL");
     if(!SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1")) {
         SDL_Log("Warning: Linear texture filtering not enabled!");
@@ -35,6 +37,8 @@ void init() {
 
     scp((g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC)),
             "Could not create renderer");
+
+    SDL_SetRelativeMouseMode(SDL_TRUE);
 }
 
 
@@ -88,21 +92,32 @@ const Face cube_faces[] = {
   },
 };
 
-#define FOV_IN_DEGREES 45.0
+
+#define FOV_IN_DEGREES 120.0
 const double FOV = FOV_IN_DEGREES * M_PI / 180;
 const float tana2 = tan(FOV / 2);
 
-void draw_line(Point2D p1, Point2D p2) {
-    SDL_RenderDrawLineF(g_renderer, p1.x + (float) screen_width / 2, p1.y + (float) screen_height / 2, p2.x + (float) screen_width / 2, p2.y + (float) screen_height / 2);
-}
-
-Point2D project(Point3D p3) {
-    return { p3.x / (p3.z * tana2), p3.y / (p3.z * tana2)};
-}
-
 struct Player {
 
-    Player(float x, float y, float z) : m_pos({x, y, z}) {}
+    Player(float x, float y, float z) 
+    : m_pos({x, y, z}), m_horizontal_view_angle(0.0), m_vertical_view_angle(0.0) {}
+
+    void move_forward(float d) {
+        m_pos.z += std::cos(m_horizontal_view_angle) * d;
+        m_pos.x += std::sin(m_horizontal_view_angle) * d;
+    }
+
+    void move_backward(float d) {
+        move_forward(-d);
+    }
+
+    void move_left(float d) {
+        m_pos.z += std::sin(m_horizontal_view_angle) * d;
+        m_pos.x -= std::cos(m_horizontal_view_angle) * d;
+    }
+    void move_right(float d) {
+        move_left(-d);
+    }
 
     void move_x(float dx) {
         m_pos.x += dx;
@@ -117,7 +132,54 @@ struct Player {
     }
 
     Point3D m_pos;
+    float m_vertical_view_angle;
+    float m_horizontal_view_angle;
 };
+
+Point3D operator*(const Point3D &p, float a) {
+    return {p.x * a, p.y * a, p.z * a};
+}
+
+Point3D operator+(const Point3D &p1, const Point3D &p2) {
+    return {p1.x + p2.x, p1.y + p2.y, p1.z + p2.z};
+}
+Point3D operator-(const Point3D &p1, const Point3D &p2) {
+    return {p1.x - p2.x, p1.y - p2.y, p1.z - p2.z};
+}
+
+inline Point2D project(Point3D p3) {
+    if (p3.z < 1) p3.z = 1;
+    return { p3.x / (p3.z * tana2), p3.y / (p3.z * tana2)};
+}
+
+inline Point3D rotate_y(float angle, Point3D p) {
+    return {p.x * cos(angle) + p.z * sin(angle), p.y, -sin(angle) * p.x + cos(angle) * p.z};
+}
+
+inline Point3D rotate_y_around_point(float angle, Point3D p, Point3D origin) {
+    Point3D p1 = p - origin;
+    p1 = rotate_y(angle, p1);
+    return p1 + origin;
+}
+
+inline Point2D project(Point3D p3, Player &player) {
+    p3 = p3 - player.m_pos;
+    if (p3.z < 1) p3.z = 1;
+    return { p3.x / (p3.z * tana2), p3.y / (p3.z * tana2)};
+}
+
+inline Point2D project_with_camera(Point3D p, Player& player) {
+    return project(rotate_y_around_point(-player.m_horizontal_view_angle, p, player.m_pos), player);
+}
+
+inline Point2D place_projected_point(Point2D point) {
+    return { std::clamp((point.x * screen_width) + screen_width * 0.5f,  -500.0f, (float) screen_width + 500),
+             std::clamp((point.y * screen_width) + screen_height * 0.5f, -500.0f, (float) screen_height + 500) };
+}
+
+inline Point2D get_onscreen_point(Point3D p, Player &player) {
+    return place_projected_point(project_with_camera(p, player));
+}
 
 struct Cube {
     Cube(Point3D pos, float scale) : m_pos(pos), m_scale(scale) {
@@ -126,30 +188,22 @@ struct Cube {
          * scale - the size of the cube
          *
          */
-        for (int i = 0; i < 4; ++i) {
-            for (int j = 0; j < 4; ++j) {
-                m_faces[i][j].x = cube_faces[i][j].x * scale + pos.x;
-                m_faces[i][j].y = cube_faces[i][j].y * scale + pos.y;
-                m_faces[i][j].z = cube_faces[i][j].z + pos.z;
-            }
-        }
     }
 
     void draw(SDL_Renderer *renderer, Player &player) {
-        if (m_pos.z > 1) {
-            for (int i = 0; i < 4; ++i) {
-                Point2D pts[5];
-                for (int j = 0; j < 4; ++j) {
-                    pts[j] = project(m_faces[i][j]);
-                    pts[j].x = (pts[j].x * screen_width) + screen_width * 0.5;
-                    pts[j].y = (pts[j].y * screen_width) + screen_height * 0.5;
-                }
-                pts[4] = pts[0];
-                std::cout << pts[0] << "\n";
-                std::cout << getpos() << "\n";
-                //TODO: figure out why this leaks tons of memory when used with z == 0.5
-                SDL_RenderDrawLinesF(renderer, pts, 5);
+        //TODO: optimize drawing the same side twice
+        for (int i = 0; i < 4; ++i) {
+            Point2D pts[5];
+            for (int j = 0; j < 4; ++j) {
+                pts[j] = get_onscreen_point(cube_faces[i][j] * m_scale + m_pos, player);
             }
+
+            if (!check_point(pts[0])) {
+                return;
+            }
+            pts[4] = pts[0];
+
+            SDL_RenderDrawLinesF(renderer, pts, 5);
         }
     }
 
@@ -157,13 +211,6 @@ struct Cube {
         m_pos.x += x;
         m_pos.y += y;
         m_pos.z += z;
-        for (int i = 0; i < 4; ++i) {
-            for (int j = 0; j < 4; ++j) {
-                m_faces[i][j].x += x;
-                m_faces[i][j].y += y;
-                m_faces[i][j].z += z;
-            }
-        }
     }
 
     Point3D getpos() {
@@ -171,9 +218,49 @@ struct Cube {
     }
 
 private:
-    Face m_faces[4];
     float m_scale;
     Point3D m_pos;
+
+    bool check_point(Point2D &p) {
+        return (-500 <= p.x && p.x <= screen_width + 500) && (-500 <= p.y <= screen_height + 500);
+    }
+};
+
+
+struct Axes {
+
+    Axes(Point3D pos, float length) : m_pos(pos), m_length(length) {}
+
+    void draw(SDL_Renderer *renderer, Player &player) {
+        
+        Point2D origin = get_onscreen_point(m_pos, player);
+
+        Point2D x = get_onscreen_point(m_pos + (Point3D) {1 * m_length, 0, 0}, player);
+        Point2D y = get_onscreen_point(m_pos + (Point3D) {0, 1 * m_length, 0}, player);
+        Point2D z = get_onscreen_point(m_pos + (Point3D) {0, 0, 1 * m_length}, player);
+
+        // draw x axis
+        SDL_RenderDrawLineF(renderer, origin.x, origin.y, x.x, x.y);
+        SDL_RenderDrawLineF(renderer, x.x - 10, x.y - 20, x.x + 10, x.y);
+        SDL_RenderDrawLineF(renderer, x.x - 10, x.y, x.x + 10, x.y - 20);
+
+        // draw y axis
+        SDL_RenderDrawLineF(renderer, origin.x, origin.y, y.x, y.y);
+        SDL_RenderDrawLineF(renderer, y.x + 15, y.y,      y.x + 15, y.y - 10);
+        SDL_RenderDrawLineF(renderer, y.x + 15, y.y - 10, y.x + 5,  y.y - 20);
+        SDL_RenderDrawLineF(renderer, y.x + 15, y.y - 10, y.x + 25, y.y - 20);
+
+        SDL_RenderDrawLineF(renderer, origin.x, origin.y, z.x, z.y);
+        SDL_RenderDrawLineF(renderer, z.x - 10, z.y - 5, z.x + 10, z.y - 5);
+        SDL_RenderDrawLineF(renderer, z.x + 10, z.y - 5, z.x - 10, z.y + 20);
+        SDL_RenderDrawLineF(renderer, z.x - 10, z.y + 20, z.x + 10, z.y + 20);
+
+
+    }
+
+private:
+    Point3D m_pos;
+    float m_length;
 };
 
 
@@ -184,11 +271,23 @@ int main () {
 
     Player player(0, 0, 0);
 
-    Cube a = Cube({-2, 2, 10}, 2);
-    Cube b = Cube({0, 2, 12}, 2);
-    Cube c = Cube({0, 2, 10}, 2);
+    int input_timer_start = SDL_GetTicks();
 
-    std::cout << "The near plane size is: " << 1.0 / tana2 << std::endl;
+
+#if 0
+    Cube *cubes[16];
+
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            cubes[i * 4 + j] = new Cube({(float) i - 2, 1.1, 3 + (float) j}, 1);
+        }
+    }
+#else
+    Cube cube({0, 1.1, 3}, 1);
+#endif
+
+    Axes axes({1, 0.5, 3}, 1);
+
 
     while (!quit) {
         while(SDL_PollEvent(&event) != 0) {
@@ -201,39 +300,51 @@ int main () {
                         screen_width = event.window.data1;
                         screen_height = event.window.data2;
                     }
-                case SDL_KEYDOWN:
-                case SDL_KEYUP:
-                    const Uint8* state = SDL_GetKeyboardState(NULL);
-                    if (state[SDL_SCANCODE_D]) {
-                        player.move_x(1);
-                    }
-                    if (state[SDL_SCANCODE_A]) {
-                        player.move_x(-1);
-                    }
-                    if (state[SDL_SCANCODE_W]) {
-                        player.move_z(1);
-                    }
-                    if (state[SDL_SCANCODE_S]) {
-                        player.move_z(-1);
-                    }
-                    if (state[SDL_SCANCODE_UP]) {
-                        player.move_y(1);
-                    }
-                    if (state[SDL_SCANCODE_DOWN]) {
-                        player.move_y(-1);
-                    }
+                    break;
+                case SDL_MOUSEMOTION:
+                    player.m_vertical_view_angle   = std::clamp(player.m_vertical_view_angle + (double) event.motion.yrel / 400, -M_PI / 2, M_PI / 2); // can only look 90 degrees up
+                    player.m_horizontal_view_angle = player.m_horizontal_view_angle + (double) event.motion.xrel / 400;
                     break;
             }
         }
+
+        if (SDL_GetTicks() - input_timer_start > 1000 / 30) {
+            input_timer_start = SDL_GetTicks();
+            const Uint8* state = SDL_GetKeyboardState(NULL);
+            if (state[SDL_SCANCODE_D]) {
+                player.move_right(0.1);
+            }
+            if (state[SDL_SCANCODE_A]) {
+                player.move_left(0.1);
+            }
+            if (state[SDL_SCANCODE_W]) {
+                player.move_forward(0.1);
+            }
+            if (state[SDL_SCANCODE_S]) {
+                player.move_backward(0.1);
+            }
+            if (state[SDL_SCANCODE_UP]) {
+                player.move_y(-0.1);
+            }
+            if (state[SDL_SCANCODE_DOWN]) {
+                player.move_y(0.1);
+            }
+        }
+
         SDL_SetRenderDrawColor(g_renderer, 0x00, 0x00, 0x00, 0xFF);
         SDL_RenderClear(g_renderer);
 
         /***************** Drawing *******************************/
 
-        SDL_SetRenderDrawColor(g_renderer, 0xFF, 0xFF, 0xFF, 0xFF);
-        a.draw(g_renderer, player);
-        b.draw(g_renderer, player);
-        c.draw(g_renderer, player);
+        SDL_SetRenderDrawColor(g_renderer, 0xFF, 0x33, 0x33, 0xFF);
+#if 0
+        for (int i = 0; i < 16; ++i) {
+            cubes[i]->draw(g_renderer, player);
+        }
+#else
+        cube.draw(g_renderer, player);
+#endif
+        axes.draw(g_renderer, player);
 
         /*********************************************************/
 
