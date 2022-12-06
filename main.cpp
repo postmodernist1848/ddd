@@ -59,37 +59,54 @@ std::ostream & operator<<(std::ostream &stream, const Point2D &p) {
     return stream;
 }
 
+Point3D operator*(const Point3D &p, float a) {
+    return {p.x * a, p.y * a, p.z * a};
+}
+Point3D operator+(const Point3D &p1, const Point3D &p2) {
+    return {p1.x + p2.x, p1.y + p2.y, p1.z + p2.z};
+}
+Point3D operator-(const Point3D &p1, const Point3D &p2) {
+    return {p1.x - p2.x, p1.y - p2.y, p1.z - p2.z};
+}
+
 typedef Point3D Face[4];
 
 const Face cube_faces[] = {
-  // Bottom
     {
         { -0.5,  0.5,  -0.5 },
         {  0.5,  0.5,  -0.5 },
         {  0.5,  0.5,  0.5 },
         {  -0.5,  0.5,  0.5 },
     },
-  // Top
     {
-    {  -0.5,  -0.5,  -0.5 },
-    {  0.5,  -0.5,  -0.5 },
-    {  0.5,  -0.5,  0.5 },
-    {  -0.5,  -0.5,  0.5 },
+        {  -0.5,  -0.5,  -0.5 },
+        {  0.5,  -0.5,  -0.5 },
+        {  0.5,  -0.5,  0.5 },
+        {  -0.5,  -0.5,  0.5 },
   },
-  // Front
     {
     {  -0.5,  -0.5,  0.5 },
     {  0.5,  -0.5,  0.5 },
     {  0.5,  0.5,  0.5 },
     {  -0.5,  0.5,  0.5 },
   },
-  // Back
   {
     {  -0.5,  -0.5,  -0.5 },
     {  0.5,  -0.5,  -0.5 },
     {  0.5,  0.5,  -0.5 },
     {  -0.5,  0.5,  -0.5 },
   },
+};
+
+const Point3D cube_points[] {
+    { -0.5,  0.5,  -0.5 },
+    {  0.5,  0.5,  -0.5 },
+    {  0.5,  0.5,   0.5 },
+    { -0.5,  0.5,   0.5 },
+    { -0.5, -0.5,   0.5 },
+    {  0.5, -0.5,   0.5 },
+    {  0.5, -0.5,  -0.5 },
+    { -0.5, -0.5,  -0.5 },
 };
 
 
@@ -136,16 +153,7 @@ struct Player {
     float m_horizontal_view_angle;
 };
 
-Point3D operator*(const Point3D &p, float a) {
-    return {p.x * a, p.y * a, p.z * a};
-}
-
-Point3D operator+(const Point3D &p1, const Point3D &p2) {
-    return {p1.x + p2.x, p1.y + p2.y, p1.z + p2.z};
-}
-Point3D operator-(const Point3D &p1, const Point3D &p2) {
-    return {p1.x - p2.x, p1.y - p2.y, p1.z - p2.z};
-}
+/******************** Projection functions **********************************/
 
 inline Point2D project(Point3D p3) {
     if (p3.z < 1) p3.z = 1;
@@ -153,7 +161,14 @@ inline Point2D project(Point3D p3) {
 }
 
 inline Point3D rotate_y(float angle, Point3D p) {
-    return {p.x * cos(angle) + p.z * sin(angle), p.y, -sin(angle) * p.x + cos(angle) * p.z};
+    return { p.x * cos(angle) + p.z * sin(angle),
+             p.y,
+             -sin(angle) * p.x + cos(angle) * p.z };
+}
+inline Point3D rotate_x(float angle, Point3D p) {
+    return { p.x, 
+             p.y * cos(angle) - p.z * sin(angle),
+             p.y * sin(angle) + p.z * cos(angle)};
 }
 
 inline Point3D rotate_y_around_point(float angle, Point3D p, Point3D origin) {
@@ -164,24 +179,59 @@ inline Point3D rotate_y_around_point(float angle, Point3D p, Point3D origin) {
 
 inline Point2D project(Point3D p3, Player &player) {
     p3 = p3 - player.m_pos;
-    if (p3.z < 1) p3.z = 1;
+    if (p3.z < 0.01) p3.z = 0.01; // the coordinate is too big (overflows) for small z, so we clamp it
     return { p3.x / (p3.z * tana2), p3.y / (p3.z * tana2)};
 }
 
-inline Point2D project_with_camera(Point3D p, Player& player) {
+inline Point2D project_with_camera_horizontal(Point3D p, Player& player) {
     return project(rotate_y_around_point(-player.m_horizontal_view_angle, p, player.m_pos), player);
 }
 
+inline Point2D project_with_camera(Point3D p, Player& player) {
+    Point3D p1 = rotate_y(-player.m_horizontal_view_angle, p - player.m_pos);
+            p1 = rotate_x(player.m_vertical_view_angle,   p1);
+    return project(p1 + player.m_pos, player);
+}
+
+/****************************************************************************/
+
 inline Point2D place_projected_point(Point2D point) {
-    return { std::clamp((point.x * screen_width) + screen_width * 0.5f,  -500.0f, (float) screen_width + 500),
-             std::clamp((point.y * screen_width) + screen_height * 0.5f, -500.0f, (float) screen_height + 500) };
+    //TODO: properly cut down lines that exceed the screen bounds
+    return { std::clamp((point.x * screen_width) + screen_width  * 0.5f, -1000.0f, (float) screen_width  + 1000.0f),
+             std::clamp((point.y * screen_width) + screen_height * 0.5f, -1000.0f, (float) screen_height + 1000.0f) };
 }
 
 inline Point2D get_onscreen_point(Point3D p, Player &player) {
     return place_projected_point(project_with_camera(p, player));
 }
 
-struct Cube {
+class Drawable {
+public:
+    virtual void draw(SDL_Renderer *renderer, Player &player) = 0;
+};
+
+//TODO: smart polygon drawing (optimize out drawing the same edge)
+struct Mesh {
+
+    Mesh(Point3D **vertices, int v_count, float scale, Point3D pos) : m_vertices(vertices), m_count(v_count),
+                                                                    m_scale(scale), m_pos(pos) {}
+
+    virtual void draw(SDL_Renderer *renderer, Player &player) {
+        Point2D pts[m_count];
+        for (int i = 0; i < m_count; ++i) {
+            pts[i] = get_onscreen_point(*m_vertices[i] * m_scale + m_pos, player);
+        }
+        SDL_RenderDrawLinesF(renderer, pts, m_count);
+    }
+
+private:
+    Point3D **m_vertices;
+    int m_count;
+    int m_scale;
+    Point3D m_pos;
+};
+
+struct Cube : Drawable {
     Cube(Point3D pos, float scale) : m_pos(pos), m_scale(scale) {
         /*
          * pos   - position of the center of the cube
@@ -191,20 +241,18 @@ struct Cube {
     }
 
     void draw(SDL_Renderer *renderer, Player &player) {
-        //TODO: optimize drawing the same side twice
-        for (int i = 0; i < 4; ++i) {
-            Point2D pts[5];
-            for (int j = 0; j < 4; ++j) {
-                pts[j] = get_onscreen_point(cube_faces[i][j] * m_scale + m_pos, player);
-            }
+        // draw order is: 0-1-2-3-4-5-6-7-0-3, 1-6, 2-5, 4-7
 
-            if (!check_point(pts[0])) {
-                return;
-            }
-            pts[4] = pts[0];
-
-            SDL_RenderDrawLinesF(renderer, pts, 5);
+        Point2D pts[10];
+        for (int i = 0; i < 8; ++i) {
+            pts[i] = get_onscreen_point(cube_points[i] * m_scale + m_pos, player);
         }
+        pts[8] = pts[0];
+        pts[9] = pts[3];
+        SDL_RenderDrawLinesF(renderer, pts, 10);
+        SDL_RenderDrawLineF(renderer, pts[1].x, pts[1].y, pts[6].x, pts[6].y);
+        SDL_RenderDrawLineF(renderer, pts[2].x, pts[2].y, pts[5].x, pts[5].y);
+        SDL_RenderDrawLineF(renderer, pts[4].x, pts[4].y, pts[7].x, pts[7].y);
     }
 
     void move(float x, float y = 0, float z = 0) {
@@ -217,17 +265,18 @@ struct Cube {
         return m_pos;
     }
 
+    float get_top() {
+        return m_pos.y - m_scale * 0.5;
+    }
+
 private:
     float m_scale;
     Point3D m_pos;
 
-    bool check_point(Point2D &p) {
-        return (-500 <= p.x && p.x <= screen_width + 500) && (-500 <= p.y <= screen_height + 500);
-    }
 };
 
 
-struct Axes {
+struct Axes : Drawable {
 
     Axes(Point3D pos, float length) : m_pos(pos), m_length(length) {}
 
@@ -255,7 +304,6 @@ struct Axes {
         SDL_RenderDrawLineF(renderer, z.x + 10, z.y - 5, z.x - 10, z.y + 20);
         SDL_RenderDrawLineF(renderer, z.x - 10, z.y + 20, z.x + 10, z.y + 20);
 
-
     }
 
 private:
@@ -269,10 +317,10 @@ int main () {
     init();
     SDL_Event event;
 
-    Player player(0, 0, 0);
-
+    Player player(0, -1.1, 0);
     int input_timer_start = SDL_GetTicks();
 
+    std::vector<Drawable *> drawing_list;
 
 #if 0
     Cube *cubes[16];
@@ -284,9 +332,12 @@ int main () {
     }
 #else
     Cube cube({0, 1.1, 3}, 1);
+    drawing_list.push_back(&cube);
+
 #endif
 
     Axes axes({1, 0.5, 3}, 1);
+    drawing_list.push_back(&axes);
 
 
     while (!quit) {
@@ -310,24 +361,25 @@ int main () {
 
         if (SDL_GetTicks() - input_timer_start > 1000 / 30) {
             input_timer_start = SDL_GetTicks();
-            const Uint8* state = SDL_GetKeyboardState(NULL);
-            if (state[SDL_SCANCODE_D]) {
+            const Uint8* key_state = SDL_GetKeyboardState(NULL);
+            const SDL_Keymod mod_state = SDL_GetModState();
+            if (key_state[SDL_SCANCODE_D]) {
                 player.move_right(0.1);
             }
-            if (state[SDL_SCANCODE_A]) {
+            if (key_state[SDL_SCANCODE_A]) {
                 player.move_left(0.1);
             }
-            if (state[SDL_SCANCODE_W]) {
+            if (key_state[SDL_SCANCODE_W]) {
                 player.move_forward(0.1);
             }
-            if (state[SDL_SCANCODE_S]) {
+            if (key_state[SDL_SCANCODE_S]) {
                 player.move_backward(0.1);
             }
-            if (state[SDL_SCANCODE_UP]) {
-                player.move_y(-0.1);
-            }
-            if (state[SDL_SCANCODE_DOWN]) {
+            if (mod_state & KMOD_CTRL) {
                 player.move_y(0.1);
+            }
+            if (mod_state & KMOD_LSHIFT) {
+                player.move_y(-0.1);
             }
         }
 
@@ -337,14 +389,10 @@ int main () {
         /***************** Drawing *******************************/
 
         SDL_SetRenderDrawColor(g_renderer, 0xFF, 0x33, 0x33, 0xFF);
-#if 0
-        for (int i = 0; i < 16; ++i) {
-            cubes[i]->draw(g_renderer, player);
+
+        for (auto i: drawing_list) {
+            i->draw(g_renderer, player);
         }
-#else
-        cube.draw(g_renderer, player);
-#endif
-        axes.draw(g_renderer, player);
 
         /*********************************************************/
 
